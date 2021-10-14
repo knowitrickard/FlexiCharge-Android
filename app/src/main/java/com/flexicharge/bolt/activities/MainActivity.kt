@@ -170,39 +170,47 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, ChargePointListAda
 
     private fun stopChargingProcess(
         initialPercentage: Int,
-        bottomSheetDialog: BottomSheetDialog,
+        bottomSheetDialog: BottomSheetDialog
     ) {
         val dateTime = unixToDateTime(currentTransaction.timestamp.toString())
-        //hours = Calendar.getInstance().time.hours.toString()
-        //minutes = Calendar.getInstance().time.minutes.toString()
-        try {
-            lifecycleScope.launch(Dispatchers.IO) {
-                val response = RetrofitInstance.flexiChargeApi.transactionStop(currentTransaction.transactionID)
-                if (response.isSuccessful) {
-                    currentTransaction = (response.body() as TransactionList)[0]
-                    lifecycleScope.launch(Dispatchers.Main) {
-                        val sharedPreferences = getSharedPreferences("sharedPrefs", Context.MODE_PRIVATE)
-                        sharedPreferences.edit().apply { putInt("TransactionId", -1) }.apply()
-                        bottomSheetDialog.dismiss()
-                        displayPaymentSummaryDialog(dateTime, initialPercentage)
+        var percentage = 0
+        if (initialPercentage != -1) percentage = initialPercentage
+        if (currentTransaction.paymentConfirmed){
+            val sharedPreferences = getSharedPreferences("sharedPrefs", Context.MODE_PRIVATE)
+            sharedPreferences.edit().apply { putInt("TransactionId", -1) }.apply()
+            bottomSheetDialog.dismiss()
+            displayPaymentSummaryDialog(dateTime, percentage)
+        }
+        else {
+            try {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    val response = RetrofitInstance.flexiChargeApi.transactionStop(currentTransaction.transactionID)
+                    if (response.isSuccessful) {
+                        currentTransaction = (response.body() as TransactionList)[0]
+                        lifecycleScope.launch(Dispatchers.Main) {
+                            val sharedPreferences = getSharedPreferences("sharedPrefs", Context.MODE_PRIVATE)
+                            sharedPreferences.edit().apply { putInt("TransactionId", -1) }.apply()
+                            bottomSheetDialog.dismiss()
+                            displayPaymentSummaryDialog(dateTime, percentage)
+                        }
                     }
-                }
-                else {
-                    lifecycleScope.launch(Dispatchers.Main) {
-                        val sharedPreferences = getSharedPreferences("sharedPrefs", Context.MODE_PRIVATE)
-                        sharedPreferences.edit().apply { putInt("TransactionId", -1) }.apply()
-                        bottomSheetDialog.dismiss()
-                        displayPaymentSummaryDialog(dateTime, initialPercentage)
+                    else {
+                        lifecycleScope.launch(Dispatchers.Main) {
+                            val sharedPreferences = getSharedPreferences("sharedPrefs", Context.MODE_PRIVATE)
+                            sharedPreferences.edit().apply { putInt("TransactionId", -1) }.apply()
+                            bottomSheetDialog.dismiss()
+                            displayPaymentSummaryDialog(dateTime, percentage)
+                        }
                     }
                 }
             }
-        }
-        catch (e: IOException) {
-            lifecycleScope.launch(Dispatchers.Main) {
-                val sharedPreferences = getSharedPreferences("sharedPrefs", Context.MODE_PRIVATE)
-                sharedPreferences.edit().apply { putInt("TransactionId", -1) }.apply()
-                bottomSheetDialog.dismiss()
-                displayPaymentSummaryDialog(dateTime, initialPercentage)
+            catch (e: IOException) {
+                lifecycleScope.launch(Dispatchers.Main) {
+                    val sharedPreferences = getSharedPreferences("sharedPrefs", Context.MODE_PRIVATE)
+                    sharedPreferences.edit().apply { putInt("TransactionId", -1) }.apply()
+                    bottomSheetDialog.dismiss()
+                    displayPaymentSummaryDialog(dateTime, percentage)
+                }
             }
         }
     }
@@ -218,44 +226,33 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, ChargePointListAda
             R.layout.layout_charger_in_progress,
             findViewById<ConstraintLayout>(R.id.chargerInProgress)
         )
+
         val progressbarPercent = bottomSheetView.findViewById<TextView>(R.id.chargeInProgressLayout_textView_progressbarPercent)
         val progressbar = bottomSheetView.findViewById<ProgressBar>(R.id.chargeInProgressLayout_progressBar)
         val chargingTimeStatus = bottomSheetView.findViewById<TextView>(R.id.chargeInProgressLayout_textview_chargingTimeStatus)
         val chargingLocation = bottomSheetView.findViewById<TextView>(R.id.chargeInProgressLayout_textView_location)
         val chargeSpeed = bottomSheetView.findViewById<TextView>(R.id.chargeInProgressLayout_textView_chargeSpeed)
 
-
         bottomSheetDialog.behavior.state = BottomSheetBehavior.STATE_EXPANDED
         bottomSheetDialog.behavior.isDraggable = false;
         bottomSheetDialog.setCancelable(false)
+        bottomSheetDialog.setContentView(bottomSheetView)
+        bottomSheetDialog.show()
 
+        var charger = chargers.filter { it.chargerID == currentTransaction.chargerID }[0]
+        var chargePoint = chargePoints.filter { it.chargePointID == charger.chargePointID }[0]
+        chargingLocation.text = chargePoint.name
+        var initialPercentage = -1
         var continueLooping = true;
-
-        var initialPercentage = 0
-        if (currentTransaction.currentChargePercentage != null) {
-            initialPercentage = currentTransaction.currentChargePercentage
-        }
-
         bottomSheetView.findViewById<MaterialButton>(R.id.chargeInProgressLayout_button_stopCharging).setOnClickListener {
             continueLooping = false
             stopChargingProcess(initialPercentage, bottomSheetDialog)
         }
-
-        bottomSheetDialog.setContentView(bottomSheetView)
-        bottomSheetDialog.show()
-
-
-        var charger = chargers.filter { it.chargerID == currentTransaction.chargerID }[0]
-        var chargePoint = chargePoints.filter { it.chargePointID == charger.chargePointID }[0]
-
         if (!currentTransaction.paymentConfirmed) {
-            chargingLocation.text = chargePoint.name
-            val df = DecimalFormat("#.##")
-            //val distanceStr = df.format(currentTransaction.kwhTransfered/100).toString()
             chargeSpeed.text = (currentTransaction.kwhTransfered/100).toString() + " kWh transferred"
-            var percent = initialPercentage
+            var percent = 0
             GlobalScope.launch {
-                while (percent < 100 && continueLooping) {
+                while (percent < 100 && continueLooping && !currentTransaction.paymentConfirmed) {
                     lifecycleScope.launch(Dispatchers.IO) {
                         val response = RetrofitInstance.flexiChargeApi.getTransaction(currentTransaction.transactionID)
                         if (response.isSuccessful) {
@@ -263,10 +260,11 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, ChargePointListAda
                             lifecycleScope.launch(Dispatchers.Main) {
                                 if (currentTransaction.currentChargePercentage != null)
                                     percent = currentTransaction.currentChargePercentage
+                                    if (initialPercentage == -1)
+                                        initialPercentage = percent
                                 progressbar.progress = percent
                                 progressbarPercent.text = percent.toString()
-                                chargeSpeed.text = currentTransaction.kwhTransfered.toString() + " kWh"
-
+                                chargeSpeed.text = currentTransaction.kwhTransfered.toString() + " kWh transferred"
                                 var minutesLeft = (100 - percent) / 60
                                 var secondsLeft = (100 - percent) % 60
                                 var timeString = String.format("%02d:%02d", minutesLeft, secondsLeft)
@@ -283,7 +281,6 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, ChargePointListAda
             }
         }
         else {
-            continueLooping = false
             stopChargingProcess(initialPercentage, bottomSheetDialog)
         }
     }
@@ -305,23 +302,23 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, ChargePointListAda
         }
 
         var kwhTransfered = 0.toDouble()
-        var totalCost = 0.toFloat()
+        var totalCost = 0.toDouble()
         var duration = 0
-        var pricePerKwh = "0"
+        var pricePerKwh = 0.toDouble()
         if (this::currentTransaction.isInitialized) {
             if (currentTransaction.kwhTransfered != null) {
                 kwhTransfered = currentTransaction.kwhTransfered
-                totalCost = (currentTransaction.kwhTransfered.toString().toDouble() * currentTransaction.pricePerKwh.toDouble()/100).toFloat()
+                totalCost = (currentTransaction.kwhTransfered.toString().toDouble() * currentTransaction.pricePerKwh.toDouble()/100)
             }
             if (currentTransaction.pricePerKwh != null) {
-                pricePerKwh = currentTransaction.pricePerKwh
+                pricePerKwh = currentTransaction.pricePerKwh.toDouble()
             }
             if (currentTransaction.currentChargePercentage != null) {
                 duration = currentTransaction.currentChargePercentage - initialPercentage
             }
         }
 
-        energyUsedTextView.text = kwhTransfered.toString() + " kWh @" + pricePerKwh + "kr kWh"
+        energyUsedTextView.text = kwhTransfered.toString() + " kWh @" + (pricePerKwh/100) + "kr kWh"
         durationTextView.text = duration.toString() + " Seconds"
         chargingStopTimeTextView.text = "Charging stopped at " + dateTime
         totalCostTextView.text = totalCost.toString() + "kr"
